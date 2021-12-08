@@ -20,7 +20,7 @@ Maven:
 ````
 <dependency>
   <groupId>io.github.alexanderschuetz97</groupId>
-  <artifactId>luajlfs</artifactId>
+  <artifactId>LuajLFS</artifactId>
   <version>1.0</version>
 </dependency>
 ````

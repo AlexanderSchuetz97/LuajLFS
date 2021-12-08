@@ -29,7 +29,7 @@
     <scm>
         <connection>scm:git:git://github.com/AlexanderSchuetz97/luaLFS.git</connection>
         <developerConnection>scm:git:ssh://github.com:AlexanderSchuetz97/luaLFS.git</developerConnection>
-        <url>https://github.com/AlexanderSchuetz97/luaLFS/tree/master</url>
+        <url>https://github.com/AlexanderSchuetz97/LuajLFS/tree/master</url>
     </scm>
 
     <build>

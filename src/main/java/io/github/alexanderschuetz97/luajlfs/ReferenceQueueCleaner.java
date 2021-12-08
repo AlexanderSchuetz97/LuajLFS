@@ -124,7 +124,7 @@ public class ReferenceQueueCleaner {
         executor.execute(new Runnable() {
             @Override
             public void run() {
-                Thread.currentThread().setName("luajLFS cleanup thread");
+                Thread.currentThread().setName("LuajLFS cleanup thread");
                 while(true) {
                     Reference<?> ref = null;
                     try {
