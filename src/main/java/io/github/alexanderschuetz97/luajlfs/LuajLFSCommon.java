@@ -19,6 +19,8 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.nativeutils.api.JVMNativeUtil;
+import io.github.alexanderschuetz97.nativeutils.api.NativeUtils;
 import io.github.alexanderschuetz97.nativeutils.api.structs.Stat;
 import org.luaj.vm2.Globals;
 import org.luaj.vm2.LuaError;
@@ -100,7 +102,11 @@ public abstract class LuajLFSCommon {
     protected static final LuaValue DUMMY_PERMISSIONS = LuaValue.valueOf("---------");
 
 
+    protected final JVMNativeUtil jvmu;
 
+    protected LuajLFSCommon()  {
+        jvmu = NativeUtils.isJVM() ? NativeUtils.getJVMUtil() : null;
+    }
 
     protected File pwd = new File(".").getAbsoluteFile();
 
@@ -233,7 +239,17 @@ public abstract class LuajLFSCommon {
 
     protected abstract Varargs lockUnlock(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len);
 
-    protected abstract Object getField(Field field, Object instance);
+    protected Object getField(Field field, Object instance) {
+        if (jvmu != null) {
+            return jvmu.FromReflectedField(field).get(instance);
+        }
+        try {
+            field.setAccessible(true);
+            return field.get(instance);
+        } catch (Exception exc) {
+            throw new LuaError("reflection error " + exc.getMessage());
+        }
+    }
 
     /**
      * Hook your IOLib here...

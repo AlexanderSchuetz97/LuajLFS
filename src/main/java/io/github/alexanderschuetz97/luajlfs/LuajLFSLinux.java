@@ -19,6 +19,7 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.nativeutils.api.JVMNativeUtil;
 import io.github.alexanderschuetz97.nativeutils.api.LinuxNativeUtil;
 import io.github.alexanderschuetz97.nativeutils.api.NativeUtils;
 import io.github.alexanderschuetz97.nativeutils.api.exceptions.InvalidFileDescriptorException;
@@ -183,6 +184,8 @@ public class LuajLFSLinux extends LuajLFSCommon {
             if (!util.fnctl_F_SETLK(util.getFD(fileDescriptor.getFD()), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_WRLCK, start, len)) {
                 return ERR_LOCK_LOCKED;
             }
+        } catch (IllegalArgumentException exc) {
+            return err("Invalid argument");
         } catch (InvalidFileDescriptorException e) {
             return ERR_BAD_FD;
         } catch (UnknownNativeErrorException e) {
@@ -200,6 +203,8 @@ public class LuajLFSLinux extends LuajLFSCommon {
             if (!util.fnctl_F_SETLK(util.getFD(fileDescriptor.getFD()), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_RDLCK, start, len)) {
                 return ERR_LOCK_LOCKED;
             }
+        } catch (IllegalArgumentException exc) {
+            return err("Invalid argument");
         } catch (InvalidFileDescriptorException e) {
             return err("File descriptor in bad state", 77);
         } catch (UnknownNativeErrorException e) {
@@ -215,6 +220,8 @@ public class LuajLFSLinux extends LuajLFSCommon {
     protected Varargs lockUnlock(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
         try {
             util.fnctl_F_SETLK(util.getFD(fileDescriptor.getFD()), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_UNLCK, start, len);
+        } catch (IllegalArgumentException exc) {
+            return err("Invalid argument");
         } catch (InvalidFileDescriptorException e) {
             return err("File descriptor in bad state", 77);
         } catch (UnknownNativeErrorException e) {
@@ -224,11 +231,6 @@ public class LuajLFSLinux extends LuajLFSCommon {
         }
 
         return LuaValue.TRUE;
-    }
-
-    @Override
-    protected Object getField(Field field, Object instance) {
-        return util.FromReflectedField(field).get(instance);
     }
 
 

@@ -444,9 +444,4 @@ public class LuajLFSWindows extends LuajLFSCommon {
             return ioErr(e);
         }
     }
-
-    @Override
-    protected Object getField(Field field, Object instance) {
-        return util.FromReflectedField(field).get(instance);
-    }
 }

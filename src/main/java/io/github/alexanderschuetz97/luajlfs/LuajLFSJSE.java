@@ -380,13 +380,5 @@ public class LuajLFSJSE extends LuajLFSCommon {
 
     }
 
-    @Override
-    protected Object getField(Field field, Object instance) {
-        try {
-            field.setAccessible(true);
-            return field.get(instance);
-        } catch (Exception exc) {
-            throw new LuaError("reflection error " + exc.getMessage());
-        }
-    }
+
 }
