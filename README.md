@@ -43,10 +43,10 @@ end
 #### IOLib
 "globals.load(new LuajLFSLib());" overwrites the IO library provided by luaj to 
 circumvent having to use reflection to access the JSEIOLibs RandomAccessFile for all LFS methods 
-that require an open "file" as argument. The replacement implementation functionally identical to the JSEIOLib.
+that require an open "file" as argument. The replacement implementation is functionally identical to the JSEIOLib.
 If you have a custom implementation of an IOLib and would like to use it then overwrite 
 io.github.alexanderschuetz97.luajlfs.LuajLFSLib.overwriteIOLib and make it either do nothing or load your IOLib here.
-In order for LuajLFS to work with your IOLib out of the box the file has to be userdata of RandomAccessfile (isuserdata(RandomAccessfile.class) + checkuserdata(RandomAccessfile.class))
+In order for LuajLFS to work with your IOLib out of the box the file object has to be userdata of RandomAccessfile (isuserdata(RandomAccessfile.class) + checkuserdata(RandomAccessfile.class))
 
 #### chdir & relative paths
 Since LuaJ supports running multiple concurrent Lua environments that should NOT affect each other calling
