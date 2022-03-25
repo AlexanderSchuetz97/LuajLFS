@@ -19,6 +19,8 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.luajfshook.api.LuaFileSystemHandler;
+import io.github.alexanderschuetz97.luajfshook.api.LuajFSHook;
 import io.github.alexanderschuetz97.nativeutils.api.NativeUtils;
 import org.luaj.vm2.Globals;
 import org.luaj.vm2.LuaError;
@@ -29,6 +31,7 @@ import org.luaj.vm2.lib.TwoArgFunction;
 import org.luaj.vm2.lib.VarArgFunction;
 
 import java.io.File;
+import java.nio.file.Path;
 
 /**
  * TwoArgFunction Lib loader for LuajLFS.
@@ -38,147 +41,73 @@ public class LuajLFSLib extends TwoArgFunction {
 
     private LuajLFSCommon lib;
 
+    private LuaFileSystemHandler handler;
+
     @Override
     public synchronized LuaValue call(LuaValue arg1, LuaValue env) {
         if (lib != null) {
             throw new LuaError("already loaded");
         }
         Globals globals = env.checkglobals();
-
+        handler = createFileSystemHandler(globals);
+        if (handler == null) {
+            throw new LuaError("no fs handler");
+        }
 
         LuaTable lfsTable = new LuaTable();
         if (NativeUtils.isLinux()) {
-            lib = loadLinux(globals, lfsTable);
+            lib = loadLinux(handler, globals, lfsTable);
         } else if(NativeUtils.isWindows()) {
-            lib = loadWindows(globals, lfsTable);
+            lib = loadWindows(handler, globals, lfsTable);
         } else {
-            lib = loadOther(globals, lfsTable);
+            lib = loadOther(handler, globals, lfsTable);
         }
 
-        overwriteLuaMethods(globals, lib, lfsTable);
+
         globals.package_.setIsLoaded("lfs", lfsTable);
         return lfsTable;
     }
 
-    /**
-     * Overwrite to add custom stuff.
-     */
-    protected void overwriteLuaMethods(Globals globals, LuajLFSCommon lib, LuaTable lfsTable) {
-        overwriteIOLib(globals, lib);
-        overwrite_os_remove(globals, lib);
-        overwrite_loadfile(globals, lib);
-        overwrite_dofile(globals, lib);
+    protected LuaFileSystemHandler createFileSystemHandler(Globals globals) {
+        return LuajFSHook.getOrInstall(globals);
+    }
+
+    public LuaFileSystemHandler getFileSystemHandler() {
+        return handler;
     }
 
     /**
-     * Call to get the work directory lua uses currently.
+     * Get the current work directory
+     * @deprecated use getFileSystemHandler
      */
+    @Deprecated
     public File getVirtualWorkDirectory() {
-        return lib.getPwd();
+        Path syspath = getFileSystemHandler().getWorkDirectory().toSystemPath();
+        if (syspath == null) {
+            //FALLBACK
+            return new File(".");
+        }
+        return syspath.toFile();
     }
 
     /**
      * Overwrite to provide custom linux mode implementation
      */
-    protected LuajLFSCommon loadLinux(Globals globals, LuaTable lfsTable) {
-       return new LuajLFSLinux(globals, lfsTable);
+    protected LuajLFSCommon loadLinux(LuaFileSystemHandler handler, Globals globals, LuaTable lfsTable) {
+       return new LuajLFSLinux(handler, globals, lfsTable);
     }
 
     /**
      * Overwrite to provide custom windows mode implementation
      */
-    protected LuajLFSCommon loadWindows(Globals globals, LuaTable lfsTable) {
-        return new LuajLFSWindows(globals, lfsTable);
+    protected LuajLFSCommon loadWindows(LuaFileSystemHandler handler, Globals globals, LuaTable lfsTable) {
+        return new LuajLFSWindows(handler, globals, lfsTable);
     }
 
     /**
      * Overwrite to provide custom unsupported os mode implementation
      */
-    protected LuajLFSCommon loadOther(Globals globals, LuaTable lfsTable) {
-        return new LuajLFSJSE(globals, lfsTable);
+    protected LuajLFSCommon loadOther(LuaFileSystemHandler handler, Globals globals, LuaTable lfsTable) {
+        return new LuajLFSJSE(handler, globals, lfsTable);
     }
-
-    /**
-     * Overwrite to provide custom IOLib implementation
-     */
-    protected void overwriteIOLib(Globals globals, LuajLFSCommon lib) {
-        LFSIoLib ioLib = new LFSIoLib(lib);
-        globals.load(ioLib);
-    }
-
-    /**
-     * Overwrite to provide custom os.remove implementation
-     */
-    protected void overwrite_os_remove(Globals globals, final LuajLFSCommon lib) {
-        LuaValue os_remove = new VarArgFunction() {
-            @Override
-            public Varargs invoke(Varargs arg) {
-                java.io.File f = lib.resolve(arg.checkjstring(1));
-                if (!f.exists()) {
-                    return varargsOf(NIL, LuajLFSCommon.NO_SUCH_FILE_OR_DIRECTORY);
-                }
-
-                if (!f.delete()) {
-                    return varargsOf(NIL, LuajLFSCommon.FAILED_TO_DELETE);
-                }
-
-                return LuaValue.TRUE;
-            }
-        };
-
-        globals.get("os").set("remove", os_remove);
-    }
-
-    /**
-     * Overwrite to provide custom loadfile implementation
-     */
-    protected void overwrite_loadfile(Globals globals, final LuajLFSCommon lib) {
-        final LuaValue loadfile = globals.get("loadfile");
-        //loadfile not present, not overwriting
-        if (loadfile.isnil()) {
-            return;
-        }
-
-        LuaValue loadfile_wrapper = new VarArgFunction() {
-
-            @Override
-            public Varargs invoke(Varargs arg) {
-                if (!arg.isstring(1)) {
-                    return loadfile.invoke(arg);
-                }
-
-                LuaValue resolvedPath = valueOf(lib.resolve(arg.checkjstring(1)).getAbsolutePath());
-                return loadfile.invoke(varargsOf(resolvedPath, arg.subargs(2)));
-            }
-        };
-
-        globals.set("loadfile", loadfile_wrapper);
-    }
-
-    /**
-     * Overwrite to provide custom loadfile implementation
-     */
-    protected void overwrite_dofile(Globals globals, final LuajLFSCommon lib) {
-        final LuaValue dofile = globals.get("dofile");
-        //dofile not present, not overwriting
-        if (dofile.isnil()) {
-            return;
-        }
-
-        LuaValue dofilefile_wrapper = new VarArgFunction() {
-
-            @Override
-            public Varargs invoke(Varargs arg) {
-                if (!arg.isstring(1)) {
-                    return dofile.invoke(arg);
-                }
-
-                LuaValue resolvedPath = valueOf(lib.resolve(arg.checkjstring(1)).getAbsolutePath());
-                return dofile.invoke(varargsOf(resolvedPath, arg.subargs(2)));
-            }
-        };
-
-        globals.set("dofile", dofilefile_wrapper);
-    }
-
 }

@@ -21,7 +21,7 @@ Maven:
 <dependency>
   <groupId>io.github.alexanderschuetz97</groupId>
   <artifactId>LuajLFS</artifactId>
-  <version>1.2</version>
+  <version>1.3</version>
 </dependency>
 ````
 
@@ -41,12 +41,11 @@ end
 ````
 ## Important Implementation Details
 #### IOLib
-"globals.load(new LuajLFSLib());" overwrites the IO library provided by luaj to 
-circumvent having to use reflection to access the JSEIOLibs RandomAccessFile for all LFS methods 
-that require an open "file" as argument. The replacement implementation is functionally identical to the JSEIOLib.
-If you have a custom implementation of an IOLib and would like to use it then overwrite 
-io.github.alexanderschuetz97.luajlfs.LuajLFSLib.overwriteIOLib and make it either do nothing or load your IOLib here.
-In order for LuajLFS to work with your IOLib out of the box the file object has to be userdata of RandomAccessfile (isuserdata(RandomAccessfile.class) + checkuserdata(RandomAccessfile.class))
+LuajLFS uses LuajFSHook to access the filesystem. (see https://github.com/AlexanderSchuetz97/LuajFSHook)
+<br>TLDR:<br>
+If LuajFSHook is not loaded prior to calling 'globals.load(new LuajLFSLib())' then
+LuajLFS will load LuajFSHook and this will overwrite the io table and some entries in the os table.
+If you use a custom IOLib or custom os functions you will have to load LuajFSHook before loading your libraries.
 
 #### chdir & relative paths
 Since LuaJ supports running multiple concurrent Lua environments that should NOT affect each other calling
@@ -55,19 +54,10 @@ affect each other's work directory. Not to mention that this is heavily discoura
 To solve this the work directory is purely virtual and tracked inside a variable in java. 
 This means if Lua changes the work directory and calls a Java method (via luajava for example) that then does new File(".") then said File Object
 would not be in the work directory that lua set, but rather in the work directory that the entire JVM uses. 
-Same goes for any calls made to C based JNI libraries. 
+Same goes for any calls made to C based JNI libraries.
 
-The following lua methods are overwritten by default to use the virtual work directory of LuajLFS:
-* os.remove
-* io.open
-* dofile
-* loadfile
-
-If you do not wish for LuajLFS to overload any one of those methods then subclass LuajLFSLib
-and overwrite the appropriate overloading method and make it either NOOP or use your own custom implementation.
-
-If you have any other JavaLib that relies on relative paths consider calling LuajLFSLib.getVirtualWorkDirectory() to
-get the current virtual Lua work directory as a basis for calculating the relative path.
+If you have any other JavaLib that relies on relative paths consider using LuajFSHook 
+to resolve paths and modify/get the work directory.
 
 #### File locking
 As mentioned before LuaJ allows for multiple concurrent Lua Environments. Unfortunately the OS/JVM that manages
@@ -84,7 +74,7 @@ The syscalls to lock a file are different and behave different:
 
 LuajLFS will detect which way the JVM uses to implement the RandomAccessFile and will use the appropriate 
 syscall to lock the file depending on the JVM implementation. Due to this, the methods may not behave identical to C
-based LuaFileSystem depending on how the JVM implemented RandomAccessFile. The main difference is that _locking allow
+based LuaFileSystem depending on how the JVM implemented RandomAccessFile. The main difference is that _locking allows
 the user to place a lock above a lock already owned by the process replacing the old lock with a new lock. LockFileEx
 does not permit this.
 

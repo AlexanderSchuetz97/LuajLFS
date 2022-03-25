@@ -19,6 +19,9 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.luajfshook.api.LuaFileSystemHandler;
+import io.github.alexanderschuetz97.luajfshook.api.LuaPath;
+import io.github.alexanderschuetz97.luajfshook.api.LuaRandomAccessFile;
 import org.luaj.vm2.Globals;
 import org.luaj.vm2.LuaError;
 import org.luaj.vm2.LuaTable;
@@ -60,23 +63,20 @@ public class LuajLFSJSE extends LuajLFSCommon {
 
     protected static final Varargs ERR_UNLOCKED = err("The lock is not held by this process");
 
-    protected LuajLFSJSE(Globals globals, LuaTable table) {
-        load(globals, table);
+    protected LuajLFSJSE(LuaFileSystemHandler dirHandler, Globals globals, LuaTable table) {
+        load(dirHandler, globals, table);
     }
 
     @Override
     protected Varargs lock_dir(Varargs args) {
-        File lock = new File(resolve(args.checkjstring(1)), "lockfile.lfs");
-        //I am aware the JVM documentation advises against doing this but this is as good as its gonna get.
-        boolean created;
+        LuaPath lock = resolve(args.checkjstring(1)).child("lockfile.lfs");
+
         try {
-            created = lock.createNewFile();
+            lock.createNewFile();
+        } catch (FileAlreadyExistsException e) {
+            return ERR_FILE_EXISTS;
         } catch (IOException e) {
             return ioErr(e);
-        }
-
-        if (!created) {
-            return ERR_FILE_EXISTS;
         }
 
         lock_dir_userdata userdata = new lock_dir_userdata(null);
@@ -120,11 +120,10 @@ public class LuajLFSJSE extends LuajLFSCommon {
 
     @Override
     protected Varargs attributes(Varargs args) {
-        Path path = resolve(args.checkjstring(1)).toPath();
         BasicFileAttributes bfa = null;
 
         try {
-            bfa = Files.readAttributes(path, BasicFileAttributes.class);
+            bfa = resolve(args.checkjstring(1)).attributes();
         } catch (NoSuchFileException e) {
             return ERR_NO_SUCH_FILE_OR_DIR;
         } catch (IOException e) {
@@ -136,11 +135,10 @@ public class LuajLFSJSE extends LuajLFSCommon {
 
     @Override
     protected Varargs symlinkattributes(Varargs args) {
-        Path path = resolve(args.checkjstring(1)).toPath();
         BasicFileAttributes bfa = null;
 
         try {
-            bfa = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            bfa = resolve(args.checkjstring(1)).linkAttributes();
         } catch (NoSuchFileException e) {
             return ERR_NO_SUCH_FILE_OR_DIR;
         } catch (IOException e) {
@@ -150,92 +148,22 @@ public class LuajLFSJSE extends LuajLFSCommon {
         return mapStatResult(args.arg(2), bfa);
     }
 
-    protected LuaValue mapStatMode(BasicFileAttributes stat) {
-        if (stat.isDirectory()) {
-            return DIRECTORY;
-        }
 
-        if (stat.isRegularFile()) {
-            return FILE;
-        }
 
-        if (stat.isSymbolicLink()) {
-            return LINK;
-        }
 
-        return OTHER;
-    }
-
-    protected LuaValue mapStatResult(LuaValue arg2, BasicFileAttributes stat) {
-        if (arg2.isstring()) {
-            String str = arg2.checkjstring();
-            switch (str) {
-                case("dev"):
-                    return LuaValue.ZERO;
-                case("ino"):
-                    return LuaValue.ZERO;
-                case("mode"):
-                    return mapStatMode(stat);
-                case("nlink"):
-                    return LuaValue.ZERO;
-                case("uid"):
-                    return LuaValue.ZERO;
-                case("gid"):
-                    return LuaValue.ZERO;
-                case("rdev"):
-                    return LuaValue.ZERO;
-                case("access"):
-                    return LuaValue.valueOf(stat.lastAccessTime().to(TimeUnit.SECONDS));
-                case("modification"):
-                    return LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS));
-                case("change"):
-                    return LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS));
-                case("size"):
-                    return LuaValue.valueOf(stat.size());
-                case("permissions"):
-                    return DUMMY_PERMISSIONS;
-                case("blocks"):
-                    return LuaValue.ZERO;
-                case("blksize"):
-                    return LuaValue.ZERO;
-                default:
-                    throw new LuaError("invalid attribute name '" + str +"'");
-            }
-        }
-
-        if (!arg2.istable()) {
-            arg2 = new LuaTable();
-        }
-
-        arg2.set(DEV, LuaValue.ZERO);
-        arg2.set(INO, LuaValue.ZERO);
-        arg2.set(MODE, mapStatMode(stat));
-        arg2.set(NLINK, LuaValue.ZERO);
-        arg2.set(UID, LuaValue.ZERO);
-        arg2.set(GID, LuaValue.ZERO);
-        arg2.set(RDEV, LuaValue.ZERO);
-        arg2.set(ACCESS, LuaValue.valueOf(stat.lastAccessTime().to(TimeUnit.SECONDS)));
-        arg2.set(MODIFICATION, LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS)));
-        arg2.set(PERMISSIONS, DUMMY_PERMISSIONS);
-        arg2.set(CHANGE, LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS)));
-        arg2.set(SIZE, LuaValue.valueOf(stat.size()));
-        arg2.set(BLOCKS, LuaValue.ZERO);
-        arg2.set(BLKSIZE, LuaValue.ZERO);
-        return arg2;
-    }
 
 
 
     @Override
     protected Varargs link(Varargs args) {
 
-        Path target = resolve(args.checkjstring(1)).toPath();
-        Path link = resolve(args.checkjstring(2)).toPath();
+        LuaPath target = resolve(args.checkjstring(1));
+        LuaPath link = resolve(args.checkjstring(2));
         try {
             if (args.checkboolean(3)) {
-                Files.createSymbolicLink(link, target);
+                link.symlink(target);
             } else {
-                Files.createLink(link, target);
+                link.link(target);
             }
         } catch (FileAlreadyExistsException e) {
             return ERR_FILE_EXISTS;
@@ -317,9 +245,13 @@ public class LuajLFSJSE extends LuajLFSCommon {
     private final ConcurrentMap<LockKey, LockCleaner> fileLockTable = new ConcurrentHashMap<>();
 
     @Override
-    protected Varargs lockExclusive(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
+    protected Varargs lockExclusive(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len) {
 
-        FileChannel channel = fileDescriptor.getChannel();
+        FileChannel channel = fileDescriptor.getFileChannel();
+        if (channel == null) {
+            return ERR_NOT_SUPPORTED;
+        }
+
         FileLock lock;
         try {
             lock = channel.tryLock(start, len, false);
@@ -343,8 +275,12 @@ public class LuajLFSJSE extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockShared(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
-        FileChannel channel = fileDescriptor.getChannel();
+    protected Varargs lockShared(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len) {
+        FileChannel channel = fileDescriptor.getFileChannel();
+        if (channel == null) {
+            return ERR_NOT_SUPPORTED;
+        }
+
         FileLock lock;
         try {
             lock = channel.tryLock(start, len, true);
@@ -368,8 +304,13 @@ public class LuajLFSJSE extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockUnlock(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
-        LockCleaner cleaner = fileLockTable.remove(new LockKey(fileDescriptor.getChannel(), start, len));
+    protected Varargs lockUnlock(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len) {
+        FileChannel channel = fileDescriptor.getFileChannel();
+        if (channel == null) {
+            return ERR_NOT_SUPPORTED;
+        }
+
+        LockCleaner cleaner = fileLockTable.remove(new LockKey(channel, start, len));
         if (cleaner != null) {
             cleaner.clear();
             return LuaValue.TRUE;

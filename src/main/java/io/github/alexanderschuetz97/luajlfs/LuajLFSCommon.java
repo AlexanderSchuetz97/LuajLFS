@@ -19,6 +19,10 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.luajfshook.api.LuaFileSystemHandler;
+import io.github.alexanderschuetz97.luajfshook.api.LuaPath;
+import io.github.alexanderschuetz97.luajfshook.api.LuaRandomAccessFile;
+import io.github.alexanderschuetz97.luajfshook.impl.DefaultLuaRandomAccessFile;
 import io.github.alexanderschuetz97.nativeutils.api.JVMNativeUtil;
 import io.github.alexanderschuetz97.nativeutils.api.NativeUtils;
 import io.github.alexanderschuetz97.nativeutils.api.structs.Stat;
@@ -31,18 +35,13 @@ import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.Varargs;
 import org.luaj.vm2.lib.OneArgFunction;
 import org.luaj.vm2.lib.VarArgFunction;
-
-import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
 import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public abstract class LuajLFSCommon {
@@ -86,6 +85,8 @@ public abstract class LuajLFSCommon {
     protected static final LuaValue INPUT_OUTPUT_ERROR = LuaValue.valueOf( "Input/output error");
     protected static final LuaValue FAILED_TO_DELETE = LuaValue.valueOf( "Failed to delete");
     protected static final LuaValue FILE_EXISTS = LuaValue.valueOf("File exists");
+    protected static final Varargs ERR_NOT_SUPPORTED = err("Not supported");
+
     protected static final Varargs ERR_BAD_FD = err("File descriptor in bad state", 77);
     protected static final Varargs ERR_NO_SUCH_FILE_OR_DIR = err(NO_SUCH_FILE_OR_DIRECTORY, 2);
     protected static final Varargs ERR_FILE_NAME_TOO_LONG = err("Filename too long", 36);
@@ -102,20 +103,21 @@ public abstract class LuajLFSCommon {
     protected static final LuaValue DUMMY_PERMISSIONS = LuaValue.valueOf("---------");
 
 
+    protected LuaFileSystemHandler dirHandler;
+
     protected final JVMNativeUtil jvmu;
 
     protected LuajLFSCommon()  {
         jvmu = NativeUtils.isJVM() ? NativeUtils.getJVMUtil() : null;
     }
 
-    protected File pwd = new File(".").getAbsoluteFile();
+    protected void load(LuaFileSystemHandler dirHandler, Globals globals, LuaTable table) {
 
-    protected void load(Globals globals, LuaTable table) {
-        try {
-            pwd = pwd.getCanonicalFile();
-        } catch (IOException e) {
-            //DC
+        this.dirHandler = dirHandler;
+        if (dirHandler == null) {
+            throw new LuaError("no dir handler");
         }
+
 
         table.set(CURRENTDIR, new VarArgFunction() {
             @Override
@@ -213,12 +215,8 @@ public abstract class LuajLFSCommon {
 
     public abstract boolean isAbsolute(String path);
 
-    public File resolve(String path) {
-        if (isAbsolute(path)) {
-            return new File(path);
-        } else {
-            return new File(pwd, path);
-        }
+    public LuaPath resolve(String path) {
+        return dirHandler.resolvePath(path);
     }
 
     protected long getTimestamp() {
@@ -233,11 +231,11 @@ public abstract class LuajLFSCommon {
 
     protected abstract Varargs link(Varargs args);
 
-    protected abstract Varargs lockExclusive(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len);
+    protected abstract Varargs lockExclusive(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len);
 
-    protected abstract Varargs lockShared(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len);
+    protected abstract Varargs lockShared(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len);
 
-    protected abstract Varargs lockUnlock(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len);
+    protected abstract Varargs lockUnlock(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len);
 
     protected Object getField(Field field, Object instance) {
         if (jvmu != null) {
@@ -256,28 +254,42 @@ public abstract class LuajLFSCommon {
      * This assumes file is either userdata of RandomAccessFile or instanceof org.luaj.vm2.lib.jse.JseIoLib.FileImpl
      * This works fine for the default globals.
      */
-    protected RandomAccessFile getFD(LuaValue value) {
+    protected LuaRandomAccessFile getFD(LuaValue value) {
         if (value.type() != LuaValue.TUSERDATA) {
             return null;
         }
 
-        if (value.isuserdata(RandomAccessFile.class)) {
-            return (RandomAccessFile) value.checkuserdata(RandomAccessFile.class);
+        if (value.isuserdata(LuaRandomAccessFile.class)) {
+            return (LuaRandomAccessFile) value.checkuserdata(LuaRandomAccessFile.class);
         }
 
-        //Why is this private luaj....
-        //org.luaj.vm2.lib.jse.JseIoLib.FileImpl
-        try {
-            Field f = value.getClass().getDeclaredField("file");
-            return (RandomAccessFile) getField(f, value);
-        } catch (Exception exc) {
-            //Can be anything from NoSuchField or ClassCast or NPE
+
+        RandomAccessFile raf;
+        if (value.isuserdata(RandomAccessFile.class)) {
+            raf = (RandomAccessFile) value.checkuserdata(RandomAccessFile.class);
+        } else {
+            //Why is this private luaj....
+            //org.luaj.vm2.lib.jse.JseIoLib.FileImpl
+            try {
+                Field f = value.getClass().getDeclaredField("file");
+                raf = (RandomAccessFile) getField(f, value);
+            } catch (Exception exc) {
+                //Can be anything from NoSuchField or ClassCast or NPE
+                return null;
+            }
+        }
+
+        if (raf == null) {
             return null;
         }
+
+        return new DefaultLuaRandomAccessFile(raf, null);
+
+
     }
 
     protected Varargs unlock(Varargs args) {
-        RandomAccessFile value = getFD(args.arg1());
+        LuaRandomAccessFile value = getFD(args.arg1());
         if (value == null) {
             throw new LuaError("bad argument #1 to 'unlock' (FILE* expected, got "+ args.arg1().typename() +")");
         }
@@ -292,7 +304,7 @@ public abstract class LuajLFSCommon {
     }
 
     protected Varargs lock(Varargs args) {
-        RandomAccessFile value = getFD(args.arg1());
+        LuaRandomAccessFile value = getFD(args.arg1());
         if (value == null) {
             throw new LuaError("bad argument #1 to 'lock' (FILE* expected, got "+ args.arg1().typename() +")");
         }
@@ -324,53 +336,59 @@ public abstract class LuajLFSCommon {
     }
 
     protected Varargs mkdir(LuaValue path) {
-        File f = resolve(path.checkjstring());
+        LuaPath f = resolve(path.checkjstring());
         if (f.exists()) {
             return err("File exists", 17);
         }
 
-        File parent = f.getParentFile();
+        LuaPath parent = f.parent();
 
         if (parent != null && !parent.exists()) {
             return err(NO_SUCH_FILE_OR_DIRECTORY, 2);
         }
 
 
-        if (f.mkdir()) {
+        try {
+            f.mkdir();
             return LuaValue.TRUE;
+        } catch (IOException e) {
+            return err(INPUT_OUTPUT_ERROR, 5);
         }
-
-        //TODO?
-        return err(INPUT_OUTPUT_ERROR, 5);
     }
 
     protected Varargs rmdir(LuaValue path) {
-        File f = resolve(path.checkjstring());
+        LuaPath f = resolve(path.checkjstring());
         if (!f.exists()) {
             return err(NO_SUCH_FILE_OR_DIRECTORY, 2);
         }
 
-        if (!f.isDirectory()) {
+        if (!f.isDir()) {
             return err("Not a directory", 20);
         }
 
         try {
-            Files.walkFileTree(f.toPath(), new SimpleFileVisitor<Path>() {
+            f.walkFileTree(Integer.MAX_VALUE, false, new LuaPath.LuaFileVisitor() {
 
                 @Override
-                public FileVisitResult postVisitDirectory(Path dir,
-                                                          IOException exc)
-                        throws IOException {
-                    Files.delete(dir);
+                public FileVisitResult preVisitDirectory(LuaPath dir) throws IOException {
+                    if (dir.isĹink()) {
+                        dir.delete();
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
                     return FileVisitResult.CONTINUE;
                 }
 
                 @Override
-                public FileVisitResult visitFile(Path file,
-                                                 BasicFileAttributes attrs)
-                        throws IOException {
-                    Files.delete(file);
+                public FileVisitResult visitFile(LuaPath dir) throws IOException {
+                    dir.delete();
                     return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(LuaPath dir) throws IOException {
+                    dir.delete();
+                    return FileVisitResult.CONTINUE;
+
                 }
             });
         } catch (IOException e) {
@@ -385,10 +403,10 @@ public abstract class LuajLFSCommon {
 
         long atime = args.narg() > 1 ? args.checklong(2) : TimeUnit.MILLISECONDS.toSeconds(getTimestamp());
         long mtime = args.optlong(3, atime);
-        File ff = resolve(npath);
+        LuaPath ff = resolve(npath);
 
         try {
-            Files.getFileAttributeView(ff.toPath(), BasicFileAttributeView.class).setTimes(FileTime.from(mtime, TimeUnit.SECONDS), FileTime.from(atime, TimeUnit.SECONDS), null);
+            ff.setFileTimes(FileTime.from(mtime, TimeUnit.SECONDS), FileTime.from(atime, TimeUnit.SECONDS), null);
         } catch (IOException e) {
             return ioErr(e);
         }
@@ -398,21 +416,27 @@ public abstract class LuajLFSCommon {
 
     protected Varargs dir(LuaValue path) {
         String npath = path.checkjstring();
-        File ff = resolve(npath);
+        LuaPath ff = resolve(npath);
 
         if (!ff.exists()) {
             throw new LuaError("cannot open " + npath + ": No such file or directory");
         }
 
-        if (!ff.isDirectory()) {
+        if (!ff.isDir()) {
             throw new LuaError("cannot open " + npath + ": Not a directory");
         }
+        List<LuaPath> pathList;
+        try {
+            pathList = ff.list();
+        } catch (IOException e) {
+            throw new LuaError("cannot open " + npath + ": I/O error");
+        }
 
-        String[] listing = ff.list();
+        String[] listing = new String[pathList.size()];
 
-        if (listing == null) {
-            //TODO improve this
-            throw new LuaError("cannot open " + npath + ": IO Error");
+        int i = 0;
+        for (LuaPath p : pathList) {
+            listing[i++] = p.name();
         }
 
         return LuaValue.varargsOf(DIR_NEXT, new dir_object_userdata(new dir_object(listing)));
@@ -460,9 +484,6 @@ public abstract class LuajLFSCommon {
         obj.nextIndex = -3;
     }
 
-    public File getPwd() {
-        return pwd;
-    }
 
     protected class dir_object {
         protected final String[] elements;
@@ -500,23 +521,23 @@ public abstract class LuajLFSCommon {
     }
 
     protected Varargs currentdir() {
-        return LuaValue.valueOf(pwd.getAbsolutePath());
+        return LuaValue.valueOf(dirHandler.getWorkDirectory().toString());
     }
 
     protected Varargs chdir(LuaValue path) {
         String npath = path.checkjstring();
-        File ff = resolve(npath);
+        LuaPath ff = resolve(npath);
 
         if (!ff.exists()) {
             return err("Unable to change working directory to '"+ npath +"'\nNo such file or directory");
         }
 
-        if (!ff.isDirectory()) {
+        if (!ff.isDir()) {
             return err("Unable to change working directory to '"+ npath +"'\nNot a directory");
         }
 
         try {
-            pwd = ff.getCanonicalFile();
+            dirHandler.setWorkDirectory(ff);
         } catch (IOException e) {
             return ioErr(e);
         }
@@ -551,10 +572,10 @@ public abstract class LuajLFSCommon {
 
     //must not have references to anything thus static important!
     protected static class lock_dir_cleaner extends ReferenceQueueCleaner.CleanerRef<lock_dir_userdata> {
-        private final File file;
+        private final LuaPath file;
         private boolean deleted;
 
-        protected lock_dir_cleaner(lock_dir_userdata referent, File file) {
+        protected lock_dir_cleaner(lock_dir_userdata referent, LuaPath file) {
             super(referent);
             this.file = file;
         }
@@ -565,7 +586,11 @@ public abstract class LuajLFSCommon {
                 return;
             }
 
-            file.delete();
+            try {
+                file.delete();
+            } catch (IOException e) {
+                //DONT CARE
+            }
             deleted = true;
         }
     }
@@ -685,8 +710,79 @@ public abstract class LuajLFSCommon {
         return arg2;
     }
 
+    protected LuaValue mapStatMode(BasicFileAttributes stat) {
+        if (stat.isDirectory()) {
+            return DIRECTORY;
+        }
 
+        if (stat.isRegularFile()) {
+            return FILE;
+        }
 
+        if (stat.isSymbolicLink()) {
+            return LINK;
+        }
+
+        return OTHER;
+    }
+
+    protected LuaValue mapStatResult(LuaValue arg2, BasicFileAttributes stat) {
+        if (arg2.isstring()) {
+            String str = arg2.checkjstring();
+            switch (str) {
+                case("dev"):
+                    return LuaValue.ZERO;
+                case("ino"):
+                    return LuaValue.ZERO;
+                case("mode"):
+                    return mapStatMode(stat);
+                case("nlink"):
+                    return LuaValue.ZERO;
+                case("uid"):
+                    return LuaValue.ZERO;
+                case("gid"):
+                    return LuaValue.ZERO;
+                case("rdev"):
+                    return LuaValue.ZERO;
+                case("access"):
+                    return LuaValue.valueOf(stat.lastAccessTime().to(TimeUnit.SECONDS));
+                case("modification"):
+                    return LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS));
+                case("change"):
+                    return LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS));
+                case("size"):
+                    return LuaValue.valueOf(stat.size());
+                case("permissions"):
+                    return DUMMY_PERMISSIONS;
+                case("blocks"):
+                    return LuaValue.ZERO;
+                case("blksize"):
+                    return LuaValue.ZERO;
+                default:
+                    throw new LuaError("invalid attribute name '" + str +"'");
+            }
+        }
+
+        if (!arg2.istable()) {
+            arg2 = new LuaTable();
+        }
+
+        arg2.set(DEV, LuaValue.ZERO);
+        arg2.set(INO, LuaValue.ZERO);
+        arg2.set(MODE, mapStatMode(stat));
+        arg2.set(NLINK, LuaValue.ZERO);
+        arg2.set(UID, LuaValue.ZERO);
+        arg2.set(GID, LuaValue.ZERO);
+        arg2.set(RDEV, LuaValue.ZERO);
+        arg2.set(ACCESS, LuaValue.valueOf(stat.lastAccessTime().to(TimeUnit.SECONDS)));
+        arg2.set(MODIFICATION, LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS)));
+        arg2.set(PERMISSIONS, DUMMY_PERMISSIONS);
+        arg2.set(CHANGE, LuaValue.valueOf(stat.lastModifiedTime().to(TimeUnit.SECONDS)));
+        arg2.set(SIZE, LuaValue.valueOf(stat.size()));
+        arg2.set(BLOCKS, LuaValue.ZERO);
+        arg2.set(BLKSIZE, LuaValue.ZERO);
+        return arg2;
+    }
 
 
 

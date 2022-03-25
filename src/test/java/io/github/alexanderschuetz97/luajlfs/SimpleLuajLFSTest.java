@@ -19,6 +19,7 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.luajfshook.api.LuajFSHook;
 import org.junit.Assert;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -42,6 +43,7 @@ public class SimpleLuajLFSTest {
 
     public LuaValue mkGlobals() {
         globals = JsePlatform.standardGlobals();
+        LuajFSHook.install(globals);
         globals.load(new LuajLFSLib());
         return globals.load("return require(\"lfs\")").call();
     }

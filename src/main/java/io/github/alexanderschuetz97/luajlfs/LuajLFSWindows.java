@@ -19,6 +19,9 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
+import io.github.alexanderschuetz97.luajfshook.api.LuaFileSystemHandler;
+import io.github.alexanderschuetz97.luajfshook.api.LuaPath;
+import io.github.alexanderschuetz97.luajfshook.api.LuaRandomAccessFile;
 import io.github.alexanderschuetz97.nativeutils.api.NativeUtils;
 import io.github.alexanderschuetz97.nativeutils.api.WindowsNativeUtil;
 import io.github.alexanderschuetz97.nativeutils.api.exceptions.InvalidFileDescriptorException;
@@ -34,13 +37,13 @@ import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.Varargs;
 import org.luaj.vm2.lib.VarArgFunction;
 
-import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 
 public class LuajLFSWindows extends LuajLFSCommon {
 
@@ -58,13 +61,13 @@ public class LuajLFSWindows extends LuajLFSCommon {
 
     private final WindowsNativeUtil util;
 
-    protected LuajLFSWindows(Globals globals, LuaTable lfsTable) {
+    protected LuajLFSWindows(LuaFileSystemHandler dirHandler, Globals globals, LuaTable lfsTable) {
         if (!NativeUtils.isWindows()) {
             throw new LuaError("OS is not Windows or cpu architecture is not supported");
         }
 
         util = NativeUtils.getWindowsUtil();
-        load(globals, lfsTable);
+        load(dirHandler, globals, lfsTable);
 
     }
 
@@ -85,11 +88,14 @@ public class LuajLFSWindows extends LuajLFSCommon {
 
     @Override
     protected Varargs lock_dir(Varargs args) {
-        String path = new File(resolve(args.checkjstring(1)), "lockfile.lfs").getAbsolutePath();
+        Path path = resolve(args.checkjstring(1)).child("lockfile.lfs").toSystemPath();
+        if (path == null) {
+            return ERR_NOT_SUPPORTED;
+        }
 
         long handle;
         try {
-            handle = util.CreateFileA(path, 0x40000000, false, false, false, WindowsNativeUtil.CreateFileA_createMode.CREATE_ALWAYS, 0x00000080 | 0x04000000);
+            handle = util.CreateFileA(path.toString(), 0x40000000, false, false, false, WindowsNativeUtil.CreateFileA_createMode.CREATE_ALWAYS, 0x00000080 | 0x04000000);
         } catch (UnknownNativeErrorException e) {
             return err(util.FormatMessageA((int) e.getCode()), e.getCode());
         } catch (FileAlreadyExistsException | SharingViolationException e) {
@@ -198,9 +204,25 @@ public class LuajLFSWindows extends LuajLFSCommon {
 
     @Override
     protected Varargs attributes(Varargs args) {
+        LuaPath path = resolve(args.checkjstring(1));
+        Path systemPath = path.toSystemPath();
+        LuaValue arg2 = args.arg(2);
+
+        if (systemPath == null) {
+            BasicFileAttributes baf;
+
+            try {
+                baf = path.attributes();
+            } catch (IOException e) {
+                return ERR_IO;
+            }
+
+            return mapStatResult(arg2, baf);
+        }
+
         Stat stat;
         try {
-            stat = util._stat64(resolve(args.checkjstring(1)).getAbsolutePath());
+            stat = util._stat64(systemPath.toString());
         } catch (IllegalArgumentException e) {
             return ERR_ILLEGAL_ARGUMENTS;
         } catch (FileNotFoundException e) {
@@ -209,7 +231,7 @@ public class LuajLFSWindows extends LuajLFSCommon {
             return err(util.strerror_s((int) e.getCode()), (int) e.getCode());
         }
 
-        return mapStatResult(args.arg(2), stat);
+        return mapStatResult(arg2, stat);
     }
 
     protected long convTime(long high, long low) {
@@ -223,16 +245,31 @@ public class LuajLFSWindows extends LuajLFSCommon {
 
     @Override
     protected Varargs symlinkattributes(Varargs args) {
-        String path = resolve(args.checkjstring(1)).getAbsolutePath();
+        LuaPath path = resolve(args.checkjstring(1));
+        Path systemPath = path.toSystemPath();
+        LuaValue arg2 = args.arg(2);
+
+        if (systemPath == null) {
+            BasicFileAttributes baf;
+
+            try {
+                baf = path.linkAttributes();
+            } catch (IOException e) {
+                return ERR_IO;
+            }
+
+            return mapStatResult(arg2, baf);
+        }
+
+        String sPath = path.toString();
 
 
         try {
-            Win32FileAttributeData data = util.GetFileAttributesEx(path);
+            Win32FileAttributeData data = util.GetFileAttributesEx(sPath);
 
             //IS THIS A LINK?
             if ((data.getDwFileAttributes() & 0x00000400L) == 0x00000400L) {
                 //CUSTOM HANDLING FOR LINK
-                LuaValue arg2 = args.arg(2);
                 if (arg2.isstring()) {
                     String str = arg2.checkjstring();
                     switch (str) {
@@ -286,7 +323,7 @@ public class LuajLFSWindows extends LuajLFSCommon {
         //NOT A LINK NORMAL STAT
         Stat stat;
         try {
-            stat = util._stat64(path);
+            stat = util._stat64(sPath);
         } catch (IllegalArgumentException e) {
             return ERR_ILLEGAL_ARGUMENTS;
         } catch (FileNotFoundException e) {
@@ -295,22 +332,30 @@ public class LuajLFSWindows extends LuajLFSCommon {
             return err(util.strerror_s((int) e.getCode()), (int) e.getCode());
         }
 
-        return mapStatResult(args.arg(2), stat);
+        return mapStatResult(arg2, stat);
     }
 
     @Override
     protected Varargs link(Varargs args) {
         //Under windows this requires admin priviliges for some reason...
         try {
-            File target = resolve(args.checkjstring(1));
+            Path target = resolve(args.checkjstring(1)).toSystemPath();
+            if (target == null) {
+                return ERR_NOT_SUPPORTED;
+            }
+
+            Path source = resolve(args.checkjstring(2)).toSystemPath();
+            if (source == null) {
+                return ERR_NOT_SUPPORTED;
+            }
 
             if (args.optboolean(3, false)) {
-                util.CreateSymbolicLinkA(resolve(args.checkjstring(2)).getAbsolutePath(), target.getAbsolutePath(),  target.isDirectory(), false);
+                util.CreateSymbolicLinkA(source.toString(), target.toString(), Files.isDirectory(target), false);
             } else {
-                if (target.isDirectory()) {
+                if (Files.isDirectory(target)) {
                     return ERR_DIR_HARDLINK;
                 }
-                util.CreateHardLinkA(resolve(args.checkjstring(2)).getAbsolutePath(), target.getAbsolutePath());
+                util.CreateHardLinkA(source.toString(), target.toString());
             }
 
         } catch (UnknownNativeErrorException e) {
@@ -321,13 +366,18 @@ public class LuajLFSWindows extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockExclusive(LuaValue userdata, RandomAccessFile file, long start, long len) {
+    protected Varargs lockExclusive(LuaValue userdata, LuaRandomAccessFile file, long start, long len) {
         FileDescriptor fileDescriptor;
         try {
-            fileDescriptor = file.getFD();
+            fileDescriptor = file.getFileDescriptor();
         } catch (IOException e) {
             return ioErr(e);
         }
+
+        if (fileDescriptor == null) {
+            return ERR_NOT_SUPPORTED;
+        }
+
 
         if (useWinApiForLocks(fileDescriptor)) {
             try {
@@ -345,10 +395,10 @@ public class LuajLFSWindows extends LuajLFSCommon {
 
 
         try {
-            long pos = file.getFilePointer();
-            file.seek(start);
+            long pos = file.getPosition();
+            file.setPosition(start);
             boolean success = util._locking(util.getFD(fileDescriptor), WindowsNativeUtil._locking_Mode._LK_NBLCK, len);
-            file.seek(pos);
+            file.setPosition(pos);
             if (!success) {
                return ERR_PERMISSION_DENIED;
             }
@@ -363,13 +413,18 @@ public class LuajLFSWindows extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockShared(LuaValue userdata, RandomAccessFile file, long start, long len) {
+    protected Varargs lockShared(LuaValue userdata, LuaRandomAccessFile file, long start, long len) {
         FileDescriptor fileDescriptor;
         try {
-            fileDescriptor = file.getFD();
+            fileDescriptor = file.getFileDescriptor();
         } catch (IOException e) {
             return ioErr(e);
         }
+
+        if (fileDescriptor == null) {
+            return ERR_NOT_SUPPORTED;
+        }
+
         if (useWinApiForLocks(fileDescriptor)) {
             try {
                 if (!util.LockFileEx(util.getHandle(fileDescriptor), false, true, start, len)) {
@@ -385,10 +440,10 @@ public class LuajLFSWindows extends LuajLFSCommon {
         }
 
         try {
-            long pos = file.getFilePointer();
-            file.seek(start);
+            long pos = file.getPosition();
+            file.setPosition(start);
             boolean success = util._locking(util.getFD(fileDescriptor), WindowsNativeUtil._locking_Mode._LK_NBLCK, len);
-            file.seek(pos);
+            file.setPosition(pos);
             if (!success) {
                 return ERR_PERMISSION_DENIED;
             }
@@ -404,12 +459,16 @@ public class LuajLFSWindows extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockUnlock(LuaValue userdata, RandomAccessFile file, long start, long len) {
+    protected Varargs lockUnlock(LuaValue userdata, LuaRandomAccessFile file, long start, long len) {
         FileDescriptor fileDescriptor;
         try {
-            fileDescriptor = file.getFD();
+            fileDescriptor = file.getFileDescriptor();
         } catch (IOException e) {
             return ioErr(e);
+        }
+
+        if (fileDescriptor == null) {
+            return ERR_NOT_SUPPORTED;
         }
 
         if (useWinApiForLocks(fileDescriptor)) {
@@ -428,10 +487,10 @@ public class LuajLFSWindows extends LuajLFSCommon {
 
 
         try {
-            long pos = file.getFilePointer();
-            file.seek(start);
+            long pos = file.getPosition();
+            file.setPosition(start);
             boolean success = util._locking(util.getFD(fileDescriptor), WindowsNativeUtil._locking_Mode._LK_UNLCK, len);
-            file.seek(pos);
+            file.setPosition(pos);
             if (!success) {
                 return ERR_PERMISSION_DENIED;
             }

@@ -6,11 +6,11 @@
 
     <groupId>io.github.alexanderschuetz97</groupId>
     <artifactId>LuajLFS</artifactId>
-    <version>1.2</version>
+    <version>1.3</version>
     <packaging>bundle</packaging>
 
     <name>${project.groupId}:${project.artifactId}</name>
-    <description>LuajLFS is a port of the C based LuaFileSystem library to luaj.</description>
+    <description>LuajLFS is a port/reimplementation of the C based LuaFileSystem library to luaj.</description>
     <url>https://github.com/AlexanderSchuetz97/luajLFS/tree/master</url>
 
     <licenses>
@@ -46,7 +46,7 @@
                         <Bundle-Name>${project.groupId}.${project.artifactId}</Bundle-Name>
                         <Bundle-Version>${project.version}</Bundle-Version>
                         <Export-Package>io.github.alexanderschuetz97.luajlfs.*</Export-Package>
-                        <Import-Package>org.luaj.vm2.*, io.github.alexanderschuetz97.nativeutils.api.*</Import-Package>
+                        <Import-Package>org.luaj.vm2.*, io.github.alexanderschuetz97.nativeutils.api.*, io.github.alexanderschuetz97.luajfshook.*</Import-Package>
                         <Include-Resource>{maven-resources}</Include-Resource>
                     </instructions>
                 </configuration>
@@ -161,6 +161,11 @@
             <groupId>io.github.alexanderschuetz97</groupId>
             <artifactId>JavaNativeUtils</artifactId>
             <version>[1.5,)</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.alexanderschuetz97</groupId>
+            <artifactId>luajfshook</artifactId>
+            <version>[1.0,)</version>
         </dependency>
         <dependency>
             <groupId>org.apache.bcel</groupId>

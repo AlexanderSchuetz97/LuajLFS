@@ -19,7 +19,9 @@
 //
 package io.github.alexanderschuetz97.luajlfs;
 
-import io.github.alexanderschuetz97.nativeutils.api.JVMNativeUtil;
+import io.github.alexanderschuetz97.luajfshook.api.LuaFileSystemHandler;
+import io.github.alexanderschuetz97.luajfshook.api.LuaPath;
+import io.github.alexanderschuetz97.luajfshook.api.LuaRandomAccessFile;
 import io.github.alexanderschuetz97.nativeutils.api.LinuxNativeUtil;
 import io.github.alexanderschuetz97.nativeutils.api.NativeUtils;
 import io.github.alexanderschuetz97.nativeutils.api.exceptions.InvalidFileDescriptorException;
@@ -32,16 +34,16 @@ import org.luaj.vm2.LuaTable;
 import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.Varargs;
 
-import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.lang.reflect.Field;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemLoopException;
 import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.nio.file.ReadOnlyFileSystemException;
+import java.nio.file.attribute.BasicFileAttributes;
 
 public class LuajLFSLinux extends LuajLFSCommon {
 
@@ -49,22 +51,22 @@ public class LuajLFSLinux extends LuajLFSCommon {
 
     private final LinuxNativeUtil util;
 
-    protected LuajLFSLinux(Globals globals, LuaTable table) {
+    protected LuajLFSLinux(LuaFileSystemHandler dirHandler, Globals globals, LuaTable table) {
         if (!NativeUtils.isLinux()) {
             throw new LuaError("OS is not Linux or cpu architecture is not supported");
         }
         util = NativeUtils.getLinuxUtil();
-        load(globals, table);
+        load(dirHandler, globals, table);
     }
 
     @Override
     protected Varargs lock_dir(Varargs args) {
         //This is ghetto but this is pretty much what lfs.c does
-        File theLockFile = new File(resolve(args.checkjstring(1)), "lockfile.lfs");
+        LuaPath theLockFile = resolve(args.checkjstring(1)).child( "lockfile.lfs");
 
         Varargs result = link(
                 LuaValue.varargsOf(LuaValue.valueOf("lock"),
-                        LuaValue.valueOf(theLockFile.getAbsolutePath()),
+                        LuaValue.valueOf(theLockFile.toString()),
                         LuaValue.TRUE));
 
 
@@ -99,13 +101,26 @@ public class LuajLFSLinux extends LuajLFSCommon {
 
     @Override
     protected Varargs attributes(Varargs args) {
-        File ff = resolve(args.checkjstring(1));
+        LuaPath path = resolve(args.checkjstring(1));
+        Path systemPath = path.toSystemPath();
         LuaValue arg2 = args.arg(2);
+
+        if (systemPath == null) {
+            BasicFileAttributes baf;
+
+            try {
+                baf = path.attributes();
+            } catch (IOException e) {
+                return ERR_IO;
+            }
+
+            return mapStatResult(arg2, baf);
+        }
 
         Stat stat;
 
         try {
-            stat = util.stat(ff.getAbsolutePath());
+            stat = util.stat(systemPath.toString());
         } catch (FileNotFoundException e) {
             return ERR_NO_SUCH_FILE_OR_DIR;
         } catch (InvalidPathException e) {
@@ -125,13 +140,26 @@ public class LuajLFSLinux extends LuajLFSCommon {
 
     @Override
     protected Varargs symlinkattributes(Varargs args) {
-        File ff = resolve(args.checkjstring(1));
+        LuaPath path = resolve(args.checkjstring(1));
+        Path systemPath = path.toSystemPath();
         LuaValue arg2 = args.arg(2);
+
+        if (systemPath == null) {
+            BasicFileAttributes baf;
+
+            try {
+                baf = path.linkAttributes();
+            } catch (IOException e) {
+                return ERR_IO;
+            }
+
+            return mapStatResult(arg2, baf);
+        }
 
         Stat stat;
 
         try {
-            stat = util.lstat(ff.getAbsolutePath());
+            stat = util.lstat(systemPath.toString());
         } catch (FileNotFoundException e) {
             return ERR_NO_SUCH_FILE_OR_DIR;
         } catch (InvalidPathException e) {
@@ -151,11 +179,33 @@ public class LuajLFSLinux extends LuajLFSCommon {
 
     @Override
     protected Varargs link(Varargs args) {
+
+        LuaPath target = resolve(args.checkjstring(1));
+        LuaPath link = resolve(args.checkjstring(2));
+
+        Path sTarget = target.toSystemPath();
+        Path sLink = link.toSystemPath();
+        if (sTarget == null || sLink == null) {
+            try {
+                if (args.checkboolean(3)) {
+                    link.symlink(target);
+                } else {
+                    link.link(target);
+                }
+            } catch (FileAlreadyExistsException e) {
+                return ERR_FILE_EXISTS;
+            } catch (IOException e) {
+                return ioErr(e);
+            }
+
+            return LuaValue.TRUE;
+        }
+
         try {
             if (args.optboolean(3, false)) {
-                util.symlink(resolve(args.checkjstring(1)).getAbsolutePath(), resolve(args.checkjstring(2)).getAbsolutePath());
+                util.symlink(sTarget.toString(), sLink.toString());
             } else {
-                util.link(resolve(args.checkjstring(1)).getAbsolutePath(), resolve(args.checkjstring(2)).getAbsolutePath());
+                util.link(sTarget.toString(), sLink.toString());
             }
         } catch (QuotaExceededException e) {
             return ERR_QUOTA;
@@ -179,9 +229,16 @@ public class LuajLFSLinux extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockExclusive(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
+    protected Varargs lockExclusive(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len) {
+
         try {
-            if (!util.fnctl_F_SETLK(util.getFD(fileDescriptor.getFD()), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_WRLCK, start, len)) {
+            FileDescriptor fd = fileDescriptor.getFileDescriptor();
+            if (fd == null) {
+                return ERR_NOT_SUPPORTED;
+            }
+
+
+            if (!util.fnctl_F_SETLK(util.getFD(fd), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_WRLCK, start, len)) {
                 return ERR_LOCK_LOCKED;
             }
         } catch (IllegalArgumentException exc) {
@@ -198,9 +255,14 @@ public class LuajLFSLinux extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockShared(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
+    protected Varargs lockShared(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len) {
         try {
-            if (!util.fnctl_F_SETLK(util.getFD(fileDescriptor.getFD()), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_RDLCK, start, len)) {
+            FileDescriptor fd = fileDescriptor.getFileDescriptor();
+            if (fd == null) {
+                return ERR_NOT_SUPPORTED;
+            }
+
+            if (!util.fnctl_F_SETLK(util.getFD(fd), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_RDLCK, start, len)) {
                 return ERR_LOCK_LOCKED;
             }
         } catch (IllegalArgumentException exc) {
@@ -217,9 +279,14 @@ public class LuajLFSLinux extends LuajLFSCommon {
     }
 
     @Override
-    protected Varargs lockUnlock(LuaValue userdata, RandomAccessFile fileDescriptor, long start, long len) {
+    protected Varargs lockUnlock(LuaValue userdata, LuaRandomAccessFile fileDescriptor, long start, long len) {
         try {
-            util.fnctl_F_SETLK(util.getFD(fileDescriptor.getFD()), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_UNLCK, start, len);
+            FileDescriptor fd = fileDescriptor.getFileDescriptor();
+            if (fd == null) {
+                return ERR_NOT_SUPPORTED;
+            }
+
+            util.fnctl_F_SETLK(util.getFD(fd), LinuxNativeUtil.fnctl_F_SETLK_Mode.F_UNLCK, start, len);
         } catch (IllegalArgumentException exc) {
             return err("Invalid argument");
         } catch (InvalidFileDescriptorException e) {

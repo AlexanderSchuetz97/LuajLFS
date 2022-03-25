@@ -72,10 +72,15 @@ local function spamRandomDirectories()
     end
 end
 
-local function assert(check, message)
+local function assert(check, message, ...)
     if not check then
         print("Assert failed!")
         print(message)
+        local t = {...}
+        for i,v in ipairs(t) do
+            print(v)
+        end
+
         io.flush()
         local t = debug.getinfo(2)
         if t and t.currentline then
@@ -99,7 +104,7 @@ local parent = lfs.currentdir()
 assert(type(parent) == "string", "parent pwd ~= string")
 
 local myfolder = pwd:sub(#parent+1)
-assert((parent .. myfolder) == pwd, "parent and pwd dont share same base path")
+assert((parent .. myfolder) == pwd, "parent and pwd dont share same base path", parent, pwd)
 
 pathSeperator = myfolder:sub(1, 1)
 myfolder = myfolder:sub(2)
